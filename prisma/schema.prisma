@@ -1,0 +1,335 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================================
+// 1. ENUMS (VALORES ESTANDARIZADOS)
+// ==========================================
+
+enum Role {
+  DIRECTOR
+  SECRETARIA
+  DOCENTE
+  ADMIN_SISTEMA
+}
+
+enum UserStatus {
+  ACTIVO
+  PENDIENTE
+  SUSPENDIDO
+}
+
+enum CourseType {
+  ACADEMICO
+  TECNICO
+}
+
+enum StudentStatus {
+  ACTIVO
+  RETIRADO
+  SUSPENDIDO
+  EGRESADO
+}
+
+enum AttendanceStatus {
+  PRESENTE
+  AUSENTE
+  TARDIA
+  EXCUSA
+}
+
+enum DayOfWeek {
+  LUNES
+  MARTES
+  MIERCOLES
+  JUEVES
+  VIERNES
+}
+
+enum GradeStatus {
+  EN_CURSO
+  APROBADO
+  REPROBADO
+  COMPLETIVO
+  EXTRAORDINARIO
+}
+
+enum ObservationType {
+  ACADEMICA
+  DISCIPLINARIA
+  PSICOLOGICA
+  MEDICA
+  GENERAL
+}
+
+// Nuevos Enums para el Módulo NOC (Tickets)
+enum TicketStatus {
+  PENDIENTE
+  REVISION
+  RESUELTO
+}
+
+enum TicketPriority {
+  ALTA
+  MEDIA
+  BAJA
+}
+
+// ==========================================
+// 2. USUARIOS Y SEGURIDAD (STAFF)
+// ==========================================
+
+model User {
+  id                String         @id @default(uuid())
+  email             String         @unique
+  password          String
+  nombre            String
+  apellido          String?
+  telefono          String?
+  direccion         String?
+  fechaNacimiento   String?
+  genero            String?        @default("M")
+
+  role              Role           @default(DOCENTE)
+  isActive          Boolean        @default(true)
+  estado            UserStatus     @default(PENDIENTE)
+
+  // Seguridad y Recuperacion
+  verificationToken String?
+  tokenExpires      DateTime?
+  resetToken        String?
+  resetTokenExpires DateTime?
+
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  // Relaciones
+  subjects          Subject[]
+  observaciones     Observation[]
+  schedules         Schedule[]
+  tickets           Ticket[]       // NUEVO: Relación de tickets creados por este usuario
+}
+
+// ==========================================
+// 3. ESTRUCTURA ACADEMICA
+// ==========================================
+
+model Course {
+  id        String      @id @default(uuid())
+  name      String      
+  section   String?     
+  type      CourseType
+  
+  // Relaciones
+  students  Student[]
+  subjects  Subject[]
+  schedules Schedule[]
+  
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@unique([name, section])
+}
+
+model Subject {
+  id          String       @id @default(uuid())
+  name        String
+  isTechnical Boolean      @default(false)
+  
+  // Relacion con Curso
+  courseId    String
+  course      Course       @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  
+  // Relacion con Docente
+  teacherId   String?
+  teacher     User?        @relation(fields: [teacherId], references: [id])
+  
+  // Academico
+  ras         RA[]
+  grades      Grade[]
+  attendance  Attendance[]
+  schedules   Schedule[]
+}
+
+model RA {
+  id        String    @id @default(uuid())
+  code      String    
+  name      String
+  weight    Int       
+  subjectId String
+  subject   Subject   @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  scores    RAScore[]
+}
+
+// ==========================================
+// 4. ESTUDIANTES (EXPEDIENTE COMPLETO)
+// ==========================================
+
+model Student {
+  id              String        @id @default(uuid())
+  matricula       String        @unique
+  estatus         StudentStatus @default(ACTIVO)
+  isDeleted       Boolean       @default(false)
+  deletedAt       DateTime?
+
+  promedio        Float         @default(0.0)
+
+  // Datos Personales
+  nombre          String
+  apellido        String
+  fechaNacimiento String?
+  genero          String?
+  nacionalidad    String?       @default("Dominicana")
+  direccion       String?
+  fotoUrl         String?
+
+  // Datos Medicos
+  alergias        String?
+  condiciones     String?
+  tipoSangre      String?
+  seguroMedico    String?
+
+  // Datos del Tutor MINERD
+  tutorNombre     String?
+  tutorParentesco String?
+  tutorTelefono   String?
+  tutorCorreo     String?
+  tutorOcupacion  String?
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // Relaciones
+  courseId        String?
+  course          Course?       @relation(fields: [courseId], references: [id])
+  grades          Grade[]
+  raScores        RAScore[]
+  attendance      Attendance[]
+  observaciones   Observation[] 
+
+  @@index([nombre, apellido])
+  @@index([isDeleted, estatus])
+}
+
+model Observation {
+  id        String          @id @default(uuid())
+  titulo    String?
+  contenido String          @db.Text
+  tipo      ObservationType @default(GENERAL) 
+  
+  studentId String
+  student   Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  
+  authorId  String
+  author    User            @relation(fields: [authorId], references: [id])
+  
+  createdAt DateTime        @default(now())
+}
+
+// ==========================================
+// 5. CALIFICACIONES Y ASISTENCIA
+// ==========================================
+
+model Grade {
+  id             String      @id @default(uuid())
+  year           String      @default("2025-2026") 
+  mes            String      @default("SEPTIEMBRE") 
+  
+  // Esquema de Evaluacion Universitaria (Unificado para todas las materias)
+  disciplina     Int?        
+  tarea          Int?        
+  practica       Int?        
+  teoria         Int?        
+  examenFinal    Int?        
+  
+  // Resultados
+  final          Int?
+  status         GradeStatus @default(EN_CURSO)
+  isLocked       Boolean     @default(false)
+  
+  studentId      String
+  student        Student     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subjectId      String
+  subject        Subject     @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  updatedAt      DateTime    @updatedAt
+
+  @@unique([studentId, subjectId, year, mes])
+}
+
+model RAScore {
+  id        String   @id @default(uuid())
+  score     Int      @default(0)
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  raId      String
+  ra        RA       @relation(fields: [raId], references: [id], onDelete: Cascade)
+  updatedAt DateTime @updatedAt
+
+  @@unique([studentId, raId])
+}
+
+model Attendance {
+  id        String           @id @default(uuid())
+  date      DateTime         @default(now())
+  status    AttendanceStatus
+  note      String?
+  studentId String
+  student   Student          @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subjectId String?
+  subject   Subject?         @relation(fields: [subjectId], references: [id])
+  createdAt DateTime         @default(now())
+}
+
+// ==========================================
+// 6. SISTEMA DE HORARIOS
+// ==========================================
+
+model Schedule {
+  id        String    @id @default(uuid())
+  day       DayOfWeek
+  
+  period    Int        
+  startTime DateTime  
+  endTime   DateTime  
+  
+  subjectId String
+  subject   Subject   @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  
+  courseId  String
+  course    Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  
+  teacherId String
+  teacher   User      @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@unique([day, startTime, courseId])
+  @@unique([day, startTime, teacherId])
+}
+
+// ==========================================
+// 7. SOPORTE TÉCNICO (NOC)
+// ==========================================
+
+model Ticket {
+  id          String         @id @default(uuid())
+  issue       String         // Asunto del reporte
+  description String         @db.Text // Descripción detallada (Text para no limitar caracteres)
+  status      TicketStatus   @default(PENDIENTE)
+  priority    TicketPriority @default(BAJA)
+  
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  // Relación: Usuario que reporta la incidencia
+  docenteId   String
+  docente     User           @relation(fields: [docenteId], references: [id], onDelete: Cascade)
+}
