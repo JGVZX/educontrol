@@ -1,7 +1,7 @@
 'use server';
 
 import { prisma } from '@/lib/prisma';
-import { DayOfWeek } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { revalidatePath } from 'next/cache';
 
 /**
@@ -9,7 +9,8 @@ import { revalidatePath } from 'next/cache';
  */
 export async function getScheduleData(email: string, role: string) {
   try {
-    const whereClause: any = {};
+    // 1. Tipado estricto sin usar 'any' (Buenas prácticas de TS)
+    const whereClause: Prisma.ScheduleWhereInput = {};
 
     // Si es docente, filtramos para que solo vea sus propias clases
     if (role === 'DOCENTE') {
@@ -20,7 +21,7 @@ export async function getScheduleData(email: string, role: string) {
       where: whereClause,
       include: {
         subject: true,
-        course: true,
+        course: true, // Esto nos trae tanto el nombre como la sección desde la BD
         teacher: {
           select: { nombre: true, apellido: true }
         }
@@ -31,13 +32,14 @@ export async function getScheduleData(email: string, role: string) {
       ]
     });
 
-    // Mapeo senior para enviar datos limpios al cliente
+    // 2. Mapeo senior para enviar datos limpios al cliente
     return schedules.map(s => ({
       id: s.id,
       day: s.day,
       period: Number(s.period),
       subjectName: s.subject.name,
-      courseName: s.course.name,
+      // ¡AQUÍ ESTÁ LA MAGIA!: Unimos el nombre del curso + su sección (Ej: "4to Gastronomía A")
+      courseName: `${s.course.name} ${s.course.section || ''}`.trim(),
       isTechnical: s.subject.isTechnical,
       teacherName: `${s.teacher?.nombre || ''} ${s.teacher?.apellido || ''}`.trim()
     }));

@@ -82,7 +82,8 @@ export async function getStudents(params: GetStudentsParams = {}) {
         apellido: s.apellido,
         matricula: s.matricula,
         estatus: s.estatus,
-        curso: s.course?.name || 'No asignado',
+        // MAGIA AQUÍ: Concatenamos el nombre del curso y la sección
+        curso: s.course ? `${s.course.name} ${s.course.section || ''}`.trim() : 'No asignado',
         seccion: s.course?.section || 'U',
         asistencia: totalDays > 0 ? Math.round((presentDays / totalDays) * 100) : 100,
         promedio: s.promedio || 0
@@ -197,10 +198,20 @@ export async function deleteStudent(id: string) {
 
 export async function getCourses() {
   try {
-    return await prisma.course.findMany({
-      orderBy: { name: 'asc' },
+    const courses = await prisma.course.findMany({
+      // Ordenamos por grado y sección para que el slider se vea perfecto
+      orderBy: [
+        { name: 'asc' },
+        { section: 'asc' }
+      ],
       select: { id: true, name: true, section: true }
     });
+
+    return courses.map(c => ({
+      id: c.id,
+      // MAGIA AQUÍ: Concatenamos para los filtros del frontend
+      name: `${c.name} ${c.section || ''}`.trim()
+    }));
   } catch (error) {
     return [];
   }

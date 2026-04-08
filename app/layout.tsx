@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
+import EduAssistant from '@/components/EduAssistant';
 
 // 1. IMPORTA ESTO
 import { UserProvider } from "@/context/UserContext";
@@ -23,7 +24,12 @@ export default function RootLayout({
         {/* 2. ENVUELVE TODO DENTRO DE ESTO */}
         <UserProvider>
           {children}
+          {/* ASISTENTE PEDAGÓGICO */}
+          <EduAssistant /> 
+          
         </UserProvider>
+      
+        
       </body>
     </html>
   );

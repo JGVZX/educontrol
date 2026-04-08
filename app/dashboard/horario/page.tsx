@@ -8,8 +8,21 @@ import {
 } from 'lucide-react';
 import { useUser } from '@/context/UserContext';
 import { getScheduleData, deleteScheduleBlock } from './actions';
-// Define DayOfWeek type manually
-type DayOfWeek = 'LUNES' | 'MARTES' | 'MIERCOLES' | 'JUEVES' | 'VIERNES';
+
+// ==========================================================================
+// INTERFACES ESTRICTAS
+// ==========================================================================
+export type DayOfWeek = 'LUNES' | 'MARTES' | 'MIERCOLES' | 'JUEVES' | 'VIERNES';
+
+export interface ScheduleSession {
+  id: string;
+  day: DayOfWeek;
+  period: number;
+  subjectName: string;
+  courseName: string; // Aquí llegará "4to Informática A" desde el action
+  teacherName: string;
+  isTechnical: boolean;
+}
 
 // Configuración de la Jornada Extendida Dominicana (8:00 AM - 4:00 PM)
 const TIME_BLOCKS = [
@@ -29,7 +42,7 @@ const DAYS: DayOfWeek[] = ['LUNES', 'MARTES', 'MIERCOLES', 'JUEVES', 'VIERNES'];
 
 export default function SchedulePage() {
   const { user, role } = useUser();
-  const [data, setData] = useState<any[]>([]);
+  const [data, setData] = useState<ScheduleSession[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedCourse, setSelectedCourse] = useState<string>('');
 
@@ -38,17 +51,135 @@ export default function SchedulePage() {
       if (user?.email && role) {
         setLoading(true);
         const result = await getScheduleData(user.email, role);
-        setData(result);
+        setData(result as ScheduleSession[]);
+        
+        // Si hay datos y somos secretaria/director, preseleccionar el primer curso para evitar un horario en blanco
+        if (result.length > 0 && (role === 'SECRETARIA' || role === 'DIRECTOR')) {
+            const uniqueCourses = Array.from(new Set(result.map((s: any) => s.courseName)));
+            if (uniqueCourses.length > 0) setSelectedCourse(uniqueCourses[0] as string);
+        }
         setLoading(false);
       }
     }
     init();
   }, [user, role]);
 
-  // Obtener lista de cursos para el filtro de secretaria
+  // Lista de cursos únicos con su sección (Ej: "1ro Secundaria A")
   const availableCourses = useMemo(() => {
-    return Array.from(new Set(data.map(s => s.courseName)));
+    const courses = Array.from(new Set(data.map(s => s.courseName)));
+    return courses.sort(); // Orden alfabético
   }, [data]);
+
+  // ==========================================================================
+  // MOTOR DE IMPRESIÓN (PDF)
+  // ==========================================================================
+  const printSchedule = () => {
+    if (data.length === 0) return alert("No hay datos en el itinerario para imprimir.");
+    if (role !== 'DOCENTE' && !selectedCourse) return alert("Seleccione un curso para imprimir su horario.");
+
+    const win = window.open('', '_blank');
+    if (!win) return alert("Permita las ventanas emergentes para generar el PDF.");
+
+    const today = new Date().toLocaleDateString('es-DO', { day: 'numeric', month: 'long', year: 'numeric' });
+    const targetName = role === 'DOCENTE' ? `Docente: ${user?.nombre}` : `Curso: ${selectedCourse}`;
+
+    const printStyles = `
+      <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; margin: 0; padding: 40px; color: #1e293b; }
+        .header { text-align: center; border-bottom: 2px solid #e2e8f0; padding-bottom: 20px; margin-bottom: 30px; }
+        .header h1 { margin: 0; font-size: 24px; font-weight: 900; color: #0f172a; text-transform: uppercase; letter-spacing: 2px; }
+        .header p { margin: 5px 0 0 0; font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 1px;}
+        .info-bar { display: flex; justify-content: space-between; margin-bottom: 20px; font-size: 14px; font-weight: bold; border-bottom: 1px solid #e2e8f0; padding-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 11px; table-layout: fixed; }
+        th { background-color: #f8fafc; color: #475569; font-weight: 900; text-transform: uppercase; letter-spacing: 1px; padding: 10px; border: 1px solid #cbd5e1; text-align: center; }
+        td { border: 1px solid #cbd5e1; padding: 8px; vertical-align: top; text-align: center; height: 60px; }
+        .break-row { background-color: #f1f5f9; font-weight: bold; text-transform: uppercase; letter-spacing: 2px; color: #64748b; text-align: center; }
+        .subject-title { font-weight: 900; font-size: 12px; color: #0f172a; margin-bottom: 4px; text-transform: uppercase; }
+        .subject-subtitle { color: #475569; font-size: 10px; }
+        .watermark { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(-45deg); font-size: 80px; color: rgba(0,0,0,0.02); z-index: -1; white-space: nowrap; font-weight: 900; }
+        @media print {
+            body { padding: 0; margin: 1cm; }
+            button { display: none; }
+        }
+      </style>
+    `;
+
+    // Generar filas de la tabla
+    const rows = TIME_BLOCKS.map(block => {
+      if (block.type === 'break') {
+        return `<tr>
+                  <td style="font-weight: bold; width: 120px;">${block.label}<br><span style="font-size:9px; font-weight:normal;">${block.range}</span></td>
+                  <td colspan="5" class="break-row">${block.label}</td>
+                </tr>`;
+      }
+
+      const dayCells = DAYS.map(dia => {
+        const session = data.find(s => 
+          s.day === dia && 
+          Number(s.period) === Number(block.p) &&
+          (role === 'DOCENTE' || s.courseName === selectedCourse)
+        );
+
+        if (session) {
+          const subtitle = role === 'DOCENTE' ? session.courseName : session.teacherName;
+          return `<td>
+                    <div class="subject-title">${session.subjectName}</div>
+                    <div class="subject-subtitle">${subtitle}</div>
+                  </td>`;
+        }
+        return `<td></td>`;
+      }).join('');
+
+      return `<tr>
+                <td style="font-weight: bold; width: 120px; background-color:#f8fafc;">${block.label}<br><span style="font-size:9px; font-weight:normal; color:#64748b;">${block.range}</span></td>
+                ${dayCells}
+              </tr>`;
+    }).join('');
+
+    const content = `
+        <div class="watermark">EDUCONTROL ITINERARIO</div>
+        <div class="header">
+            <h1>Itinerario Escolar Oficial</h1>
+            <p>Politécnico Educativo - La Vega, Rep. Dom.</p>
+        </div>
+        <div class="info-bar">
+            <span>${targetName}</span>
+            <span>Fecha de Emisión: ${today}</span>
+            <span>Año Escolar: 2025-2026</span>
+        </div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Bloque Horario</th>
+                    ${DAYS.map(d => `<th>${d}</th>`).join('')}
+                </tr>
+            </thead>
+            <tbody>
+                ${rows}
+            </tbody>
+        </table>
+        <div style="margin-top: 30px; font-size: 10px; color: #94a3b8; text-align: center;">
+            Documento generado por EduControl. Los horarios están sujetos a cambios por la Dirección Académica.
+        </div>
+    `;
+
+    win.document.write(`
+      <html>
+        <head>
+            <title>Impresión de Horario</title>
+            ${printStyles}
+        </head>
+        <body>
+            ${content}
+            <script>
+                window.onload = () => { window.print(); }
+            </script>
+        </body>
+      </html>
+    `);
+    win.document.close();
+  };
 
   if (loading) return <ScheduleSkeleton />;
 
@@ -72,17 +203,20 @@ export default function SchedulePage() {
             <div className="flex items-center gap-2 bg-slate-100 dark:bg-slate-800 px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 shadow-inner">
               <Filter size={16} className="text-slate-400" />
               <select 
-                className="bg-transparent text-sm font-bold outline-none text-slate-700 dark:text-slate-200 min-w-[150px]"
+                className="bg-transparent text-sm font-bold outline-none text-slate-700 dark:text-slate-200 min-w-[200px]"
                 value={selectedCourse}
                 onChange={(e) => setSelectedCourse(e.target.value)}
               >
-                <option value="">Todos los Cursos</option>
                 {availableCourses.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
           )}
-          <button className="p-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-50 transition-all shadow-sm">
-            <Printer size={20} className="text-slate-600 dark:text-slate-400" />
+          <button 
+            onClick={printSchedule}
+            className="p-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl hover:bg-slate-50 hover:text-blue-600 transition-all shadow-sm"
+            title="Imprimir Horario"
+          >
+            <Printer size={20} className="text-slate-600 dark:text-slate-400 transition-colors" />
           </button>
         </div>
       </header>
@@ -152,11 +286,7 @@ export default function SchedulePage() {
                           </div>
                         ) : (
                           <div className="h-full min-h-[90px] rounded-2xl border-2 border-dashed border-slate-100 dark:border-slate-800/40 flex items-center justify-center group/empty transition-colors hover:border-slate-200">
-                            {(role === 'SECRETARIA' || role === 'DIRECTOR') && selectedCourse && (
-                              <button className="opacity-0 group-hover/empty:opacity-100 p-2 bg-blue-600 text-white rounded-full shadow-lg transition-all hover:scale-110 active:scale-90">
-                                <Plus size={16} />
-                              </button>
-                            )}
+                            {/* Espacio vacío - Opcional: botón de agregar si lo requieres luego */}
                           </div>
                         )}
                       </td>

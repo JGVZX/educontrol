@@ -49,7 +49,8 @@ export async function getSubjects(userEmail: string, role: string) {
       id: s.id,
       name: s.name,
       courseId: s.courseId,
-      courseName: s.course.name,
+      // ¡MAGIA AQUÍ!: Unimos el grado y la sección para que diga "1ro A" o "5to Informática B"
+      courseName: s.course ? `${s.course.name} ${s.course.section || ''}`.trim() : 'Sin Curso',
       type: s.isTechnical ? 'TECNICA' : 'ACADEMICA',
       teacherId: s.teacherId,
     }));

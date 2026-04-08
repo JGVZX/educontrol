@@ -243,26 +243,39 @@ export default function GradesPage() {
           </div>
           
           {viewState === 'DETAILS' && (
-              <button onClick={() => setViewState('GRID')} className="flex items-center gap-2 px-6 py-3.5 bg-white border border-slate-200 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-slate-50 transition-all shadow-sm">
+              <button onClick={() => setViewState('GRID')} className="flex items-center gap-2 px-6 py-3.5 bg-white border border-slate-200 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:bg-slate-50 hover:-translate-x-1 transition-all shadow-sm">
                   <ArrowLeft size={16} /> Volver a Cursos
               </button>
           )}
         </div>
 
-        {/* VISTA GRID */}
+        {/* VISTA GRID: DISEÑO PROFESIONAL CON MARCA DE AGUA MEJORADA */}
         {viewState === 'GRID' && (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8 no-print">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8 no-print p-2">
               {uniqueCourses.map(course => (
                   <div key={course.id} onClick={() => { setSelectedCourseId(course.id); setSelectedSubjectId(null); setViewState('DETAILS'); }}
-                      className="group bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm hover:shadow-xl cursor-pointer transition-all duration-500 relative overflow-hidden"
+                      className="group bg-white p-8 rounded-[2.5rem] border border-slate-200 shadow-sm hover:shadow-2xl hover:-translate-y-2 cursor-pointer transition-all duration-500 relative overflow-hidden"
                   >
+                      {/* Marca de agua estilo "Cuaderno/Libro" mucho más visible y dinámica */}
+                      <div className="absolute -right-4 -bottom-4 text-slate-100 group-hover:text-blue-50 group-hover:scale-110 group-hover:-rotate-6 transition-all duration-700 pointer-events-none z-0">
+                          <BookOpen size={180} strokeWidth={1} />
+                      </div>
+
                       <div className="flex flex-col h-full justify-between relative z-10">
                           <div>
-                              <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mb-6 shadow-inner">
+                              <div className="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center mb-6 shadow-inner group-hover:scale-110 group-hover:bg-blue-600 group-hover:text-white transition-all duration-300">
                                  <GraduationCap size={28}/>
                               </div>
-                              <h3 className="text-3xl font-black text-slate-900 leading-none mb-2">{course.name}</h3>
-                              <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">{course.type}</p>
+                              <h3 className="text-3xl font-black text-slate-900 leading-none mb-4">{course.name}</h3>
+                              
+                              {/* ETIQUETA VISUAL (BADGE) PARA EL TIPO DE CURSO */}
+                              <span className={`inline-flex px-3 py-1 rounded-xl text-[10px] font-black uppercase tracking-widest shadow-sm ${
+                                  course.type === 'TECNICA' 
+                                  ? 'bg-indigo-50 text-indigo-600 border border-indigo-100' 
+                                  : 'bg-emerald-50 text-emerald-600 border border-emerald-100'
+                              }`}>
+                                  {course.type === 'TECNICA' ? 'TÉCNICA' : 'ACADÉMICA'}
+                              </span>
                           </div>
                       </div>
                   </div>
@@ -270,9 +283,9 @@ export default function GradesPage() {
           </div>
         )}
 
-        {/* VISTA DETALLES: GESTION DE NOTAS */}
+        {/* VISTA DETALLES: GESTION DE NOTAS (Con efecto zoom-in suave y rápido) */}
         {viewState === 'DETAILS' && currentSubject && (
-          <div className="animate-in fade-in slide-in-from-bottom-8 duration-700 space-y-6">
+          <div className="animate-in zoom-in-[0.98] fade-in slide-in-from-bottom-4 duration-500 ease-out space-y-6">
               
               {/* SELECTOR DE MESES INSTANTÁNEO */}
               <div className="bg-white p-4 rounded-3xl border border-slate-100 shadow-sm flex flex-wrap gap-2 items-center no-print">
@@ -285,7 +298,7 @@ export default function GradesPage() {
                               key={month}
                               onClick={() => setSelectedMonth(month)}
                               className={`px-6 py-2.5 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all whitespace-nowrap ${
-                                  selectedMonth === month ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
+                                  selectedMonth === month ? 'bg-blue-600 text-white shadow-md shadow-blue-600/20 scale-105' : 'bg-slate-50 text-slate-500 hover:bg-slate-100'
                               }`}
                           >
                               {month}
@@ -338,7 +351,7 @@ export default function GradesPage() {
                             <button 
                                 onClick={() => handlePrint('CLASS')} 
                                 title="Imprimir solo el mes actual"
-                                className="px-5 py-3.5 bg-white border border-slate-200 text-slate-600 rounded-2xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 hover:bg-slate-50 transition-colors shadow-sm"
+                                className="px-5 py-3.5 bg-white border border-slate-200 text-slate-600 rounded-2xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 hover:bg-slate-50 hover:-translate-y-0.5 transition-all shadow-sm"
                             >
                                 <Printer size={16}/> Mes Actual
                             </button>
@@ -346,7 +359,7 @@ export default function GradesPage() {
                             <button 
                                 onClick={() => handlePrint('CLASS_ANNUAL')} 
                                 title="Imprimir sábana con todos los meses y promedio"
-                                className="px-5 py-3.5 bg-slate-900 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 hover:bg-slate-800 transition-colors shadow-lg shadow-slate-900/20"
+                                className="px-5 py-3.5 bg-slate-900 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest flex items-center gap-2 hover:bg-slate-800 hover:-translate-y-0.5 transition-all shadow-lg shadow-slate-900/20"
                             >
                                 <FileText size={16}/> Récord Anual
                             </button>
@@ -406,23 +419,23 @@ export default function GradesPage() {
                                               </td>
                                               <td className="px-6 py-5 text-center bg-blue-50/10">
                                                   {st.currentMonthGrade?.final !== null && st.currentMonthGrade?.final !== undefined ? (
-                                                    <div className="inline-flex flex-col px-4 py-2 rounded-2xl bg-slate-50 border border-slate-100 text-slate-700">
-                                                        <span className="text-xl font-black leading-none">{st.currentMonthGrade.final}</span>
-                                                    </div>
+                                                      <div className="inline-flex flex-col px-4 py-2 rounded-2xl bg-slate-50 border border-slate-100 text-slate-700">
+                                                          <span className="text-xl font-black leading-none">{st.currentMonthGrade.final}</span>
+                                                      </div>
                                                   ) : (
-                                                    <span className="text-xl font-black text-slate-300">-</span>
+                                                      <span className="text-xl font-black text-slate-300">-</span>
                                                   )}
                                                   <div className="mt-2 hidden print:block text-[10px] uppercase font-bold text-slate-500">{st.monthStatus}</div>
                                               </td>
                                               <td className="px-6 py-5 text-center border-l border-slate-50">
                                                   {st.average !== null ? (
-                                                    <div className={`inline-flex items-center justify-center w-12 h-12 rounded-full border-4 ${st.average >= 70 ? 'border-emerald-100 text-emerald-600 bg-emerald-50' : 'border-rose-100 text-rose-600 bg-rose-50'}`}>
-                                                        <span className="text-sm font-black">{st.average}</span>
-                                                    </div>
+                                                      <div className={`inline-flex items-center justify-center w-12 h-12 rounded-full border-4 ${st.average >= 70 ? 'border-emerald-100 text-emerald-600 bg-emerald-50' : 'border-rose-100 text-rose-600 bg-rose-50'}`}>
+                                                          <span className="text-sm font-black">{st.average}</span>
+                                                      </div>
                                                   ) : (
-                                                    <div className="inline-flex items-center justify-center w-12 h-12 rounded-full border-4 border-slate-100 text-slate-300 bg-slate-50">
-                                                        <span className="text-sm font-black">-</span>
-                                                    </div>
+                                                      <div className="inline-flex items-center justify-center w-12 h-12 rounded-full border-4 border-slate-100 text-slate-300 bg-slate-50">
+                                                          <span className="text-sm font-black">-</span>
+                                                      </div>
                                                   )}
                                               </td>
                                               <td className="px-10 py-5 text-right no-print">
@@ -431,14 +444,14 @@ export default function GradesPage() {
                                                           <button 
                                                               onClick={() => handlePrint('STUDENT', st)}
                                                               title="Imprimir Boletín Individual"
-                                                              className="inline-flex items-center justify-center w-12 h-12 rounded-2xl transition-all shadow-sm bg-slate-50 border border-slate-200 text-slate-500 hover:text-white hover:bg-slate-900"
+                                                              className="inline-flex items-center justify-center w-12 h-12 rounded-2xl transition-all shadow-sm bg-slate-50 border border-slate-200 text-slate-500 hover:text-white hover:bg-slate-900 hover:-translate-y-1"
                                                           >
                                                               <FileText size={18}/> 
                                                           </button>
                                                       )}
                                                       <button 
                                                           onClick={() => openEvaluationModal(st)}
-                                                          className="inline-flex items-center justify-center px-5 h-12 rounded-2xl transition-all shadow-sm bg-white border border-slate-200 text-blue-600 hover:text-white hover:bg-blue-600"
+                                                          className="inline-flex items-center justify-center px-5 h-12 rounded-2xl transition-all shadow-sm bg-white border border-slate-200 text-blue-600 hover:text-white hover:bg-blue-600 hover:-translate-y-1"
                                                       >
                                                           <Edit3 size={18}/> 
                                                           <span className="hidden lg:inline text-[10px] font-black uppercase tracking-widest ml-2">Evaluar</span>
