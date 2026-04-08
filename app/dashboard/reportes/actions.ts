@@ -1,130 +1,166 @@
 'use server';
 
 import { prisma } from '@/lib/prisma';
+import { revalidatePath } from 'next/cache';
+import { put } from '@vercel/blob';
+
+// Definición de tipos para asegurar la integridad de la base de datos
+type Role = 'ADMIN_SISTEMA' | 'DIRECTOR' | 'DOCENTE' | 'SECRETARIA';
 
 // ==========================================
-// 1. DATOS PARA DIRECTOR (Analítica Global)
+// 1. MONITOR DE TICKETS (NOC)
 // ==========================================
-export async function getDirectorReports() {
+
+/** Obtener todas las incidencias técnicas para el Administrador */
+export async function getAllTickets() {
   try {
-    // 1. Totales (Solo alumnos activos y no borrados)
-    const totalStudents = await prisma.student.count({
-        where: { isDeleted: false, estatus: 'ACTIVO' }
-    });
-    
-    // 2. Alumnos en Riesgo (Lógica optimizada)
-    // Usamos el campo `promedio` que nuestra BD ya actualiza automáticamente,
-    // esto es 100x más rápido que traer todas las notas y calcular en memoria.
-    const failingStudents = await prisma.student.findMany({
-      where: {
-          isDeleted: false,
-          estatus: 'ACTIVO',
-          promedio: { lt: 70, gt: 0 } // Promedio menor a 70, pero mayor a 0 (para ignorar nuevos)
+    return await prisma.ticket.findMany({
+      include: {
+        docente: {
+          select: {
+            nombre: true,
+            apellido: true,
+            email: true,
+            role: true
+          }
+        }
       },
-      include: { course: true },
-      orderBy: { promedio: 'asc' } // Los más críticos primero
+      orderBy: { createdAt: 'desc' }
     });
-
-    return {
-      totalStudents,
-      failingCount: failingStudents.length,
-      // Mapeamos para la tabla del PDF
-      failingList: failingStudents.map(s => ({
-        id: s.id,
-        nombre: `${s.nombre} ${s.apellido}`,
-        curso: s.course?.name || 'Sin Curso',
-        matricula: s.matricula,
-        promedio: s.promedio
-      }))
-    };
   } catch (error) {
-    console.error("Error en Reportes Director:", error);
-    return { totalStudents: 0, failingCount: 0, failingList: [] };
-  }
-}
-
-// ==========================================
-// 2. DATOS PARA DOCENTE (Sus Materias y Listas)
-// ==========================================
-export async function getTeacherSubjectsForReports(email: string) {
-  try {
-    const user = await prisma.user.findUnique({
-      where: { email },
-      include: { 
-          subjects: { 
-              include: { 
-                  course: {
-                      include: {
-                          // Traemos a los alumnos reales para imprimir la lista
-                          students: {
-                              where: { isDeleted: false, estatus: 'ACTIVO' },
-                              orderBy: { apellido: 'asc' } // Orden alfabético oficial
-                          }
-                      }
-                  } 
-              } 
-          } 
-      }
-    });
-
-    if (!user) return [];
-
-    // Mapeamos materias y extraemos la lista de nombres para el PDF
-    const subjects = user.subjects.map((sub) => {
-        return {
-            id: sub.id,
-            name: sub.name,
-            courseName: sub.course.name,
-            studentCount: sub.course.students.length,
-            // Aquí generamos el array de strings que el motor de PDF usará para las filas
-            students: sub.course.students.map(st => `${st.apellido}, ${st.nombre}`)
-        };
-    });
-
-    return subjects;
-  } catch (error) {
-    console.error("Error en Reportes Docente:", error);
+    console.error("Fallo crítico en obtención de tickets:", error);
     return [];
   }
 }
 
-// ==========================================
-// 3. DATOS PARA SECRETARIA (Certificados)
-// ==========================================
-export async function getStudentForCertificate(matricula: string) {
+/** Cambiar el estado de un ticket (Ej: Resolver problema) */
+export async function updateTicketStatus(ticketId: string, newStatus: 'RESUELTO' | 'REVISION' | 'PENDIENTE') {
   try {
-    // Usamos findFirst por si acaso la matrícula tiene espacios y validamos que no esté borrado
-    const student = await prisma.student.findFirst({
-      where: { 
-          matricula: matricula.trim(),
-          isDeleted: false
-      },
-      include: { course: true }
+    await prisma.ticket.update({
+      where: { id: ticketId },
+      data: { status: newStatus }
     });
-    return student;
+    
+    revalidatePath('/admin/administracion');
+    return { success: true };
   } catch (error) {
-    console.error("Error buscando certificado:", error);
-    return null;
+    console.error("Error al actualizar ticket:", error);
+    return { success: false };
   }
 }
 
 // ==========================================
-// 4. SOPORTE TÉCNICO (Tickets)
+// 2. GESTIÓN DE USUARIOS
 // ==========================================
-export async function submitSupportTicket(data: { subject: string, description: string, userEmail: string }) {
-    try {
-        // Aquí podrías conectarlo a un servicio como Resend/Nodemailer para que te llegue un correo,
-        // o guardarlo en una tabla 'Tickets' en la BD.
-        // Por ahora simularemos el procesamiento exitoso.
-        console.log(`🎟️ NUEVO TICKET DE SOPORTE de ${data.userEmail}`);
-        console.log(`Asunto: ${data.subject}`);
-        console.log(`Descripción: ${data.description}`);
 
-        // Simulamos un ligero delay de red
-        await new Promise(resolve => setTimeout(resolve, 800));
+/** Obtener personal para auditoría administrativa */
+export async function getUsersForMonitoring() {
+  try {
+    return await prisma.user.findMany({
+      select: {
+        id: true,
+        nombre: true,
+        apellido: true,
+        email: true,
+        role: true,
+        estado: true,
+        updatedAt: true
+      },
+      orderBy: { nombre: 'asc' }
+    });
+  } catch (error) {
+    console.error("Error en monitoreo de usuarios:", error);
+    return [];
+  }
+}
 
-        return { success: true };
-    } catch (error) {
-        return { success: false, message: "Error de red al enviar el ticket." };
+/** Suspender o Activar cuentas de personal */
+export async function toggleUserStatus(userId: string, currentStatus: string) {
+  try {
+    const newStatus = currentStatus === 'ACTIVO' ? 'SUSPENDIDO' : 'ACTIVO';
+    await prisma.user.update({
+      where: { id: userId },
+      data: { estado: newStatus as any }
+    });
+    revalidatePath('/admin/administracion');
+    return { success: true };
+  } catch (error) {
+    return { success: false };
+  }
+}
+
+// ============================================================
+// 3. PROTOCOLO DE RESPALDO (Vercel Blob Sync)
+// ============================================================
+
+/** * Ejecuta un volcado integral de la base de datos y lo sincroniza con Vercel Blob.
+ * Implementado para Tesis de Ingeniería en Sistemas - EduControl.
+ */
+export async function generateDatabaseBackup(userEmail: string, role: Role) {
+  try {
+    // Seguridad: Solo el administrador puede ejecutar volcados de base de datos
+    if (role !== 'ADMIN_SISTEMA') {
+      throw new Error("Acceso denegado: Privilegios insuficientes para backup.");
     }
+
+    // Extracción masiva de todos los nodos de la base de datos
+    const [
+      usuarios, estudiantes, cursos, asignaturas,
+      resultadosAprendizaje, observaciones, calificaciones,
+      calificacionesRA, asistencia, horarios
+    ] = await Promise.all([
+      prisma.user.findMany(),
+      prisma.student.findMany(),
+      prisma.course.findMany(),
+      prisma.subject.findMany(),
+      prisma.rA.findMany(),
+      prisma.observation.findMany(),
+      prisma.grade.findMany(),
+      prisma.rAScore.findMany(),
+      prisma.attendance.findMany(),
+      prisma.schedule.findMany()
+    ]);
+
+    // Snapshot Estructurado
+    const backupSnapshot = {
+      metadata: {
+        system: "EduControl Core Engine",
+        generatedAt: new Date().toISOString(),
+        exportedBy: userEmail,
+        integrityStatus: "VERIFIED",
+        summary: {
+          total_usuarios: usuarios.length,
+          total_estudiantes: estudiantes.length,
+          total_registros_asistencia: asistencia.length
+        }
+      },
+      payload: {
+        usuarios, estudiantes, cursos, asignaturas,
+        resultadosAprendizaje, observaciones, calificaciones,
+        calificacionesRA, asistencia, horarios
+      }
+    };
+
+    const backupContent = JSON.stringify(backupSnapshot);
+    const fileName = `backups/full_dump_${Date.now()}.json`;
+
+    // Sincronización con la nube (Vercel Blob)
+    // NOTA: Asegúrate de tener el token en tu .env o pégalo aquí si es para pruebas locales
+    const blob = await put(fileName, backupContent, {
+      access: 'public',
+      contentType: 'application/json',
+      token:"vercel_blob_rw_p7Saci39nffKCvfJ_WSTqJ8OsNZg5rd883gK1bqWcsQvMVu",
+      addRandomSuffix: true,
+    });
+
+    return {
+      success: true,
+      url: blob.url,
+      message: "Respaldo sincronizado exitosamente con la infraestructura perimetral."
+    };
+
+  } catch (error) {
+    console.error("[NOC Backup Error]:", error);
+    return { success: false, url: '', message: "Error al procesar el respaldo." };
+  }
 }

@@ -13,6 +13,7 @@
 
 import { prisma } from '@/lib/prisma';
 import type { DashboardData, Role, StudentActivity, ChartItem, SubjectData, SystemTicket } from './page';
+import { put } from '@vercel/blob';
 
 /**
  * Orquesta la extracción asíncrona de telemetría y métricas operativas.
@@ -233,14 +234,14 @@ export async function getDashboardData(userEmail: string, role: Role): Promise<D
  * @param {Role} role - Validación del vector de privilegios.
  * @returns {Promise<string>} String JSON con todas las colecciones.
  */
-export async function generateDatabaseBackup(userEmail: string, role: Role): Promise<string> {
+export async function generateDatabaseBackup(userEmail: string, role: Role): Promise<{ success: boolean; url: string }> {
   try {
     // 1. Capa de Seguridad (Guard Clause)
     if (role !== 'ADMIN_SISTEMA') {
       throw new Error("Violación de Seguridad: Acceso denegado a la extracción de datos.");
     }
 
-    // 2. Extracción Concurrente de TODOS los Nodos de Datos (Full Database Dump via Prisma)
+    // 2. Extracción Concurrente de TODOS los Nodos de Datos
     const [
       usuarios, 
       estudiantes, 
@@ -265,7 +266,7 @@ export async function generateDatabaseBackup(userEmail: string, role: Role): Pro
       prisma.schedule.findMany()
     ]);
 
-    // 3. Empaquetado de la Estructura de Datos (Snapshot Completo)
+    // 3. Empaquetado del Snapshot Completo
     const backupSnapshot = {
       metadata: {
         system: "EduControl Core Engine",
@@ -300,8 +301,26 @@ export async function generateDatabaseBackup(userEmail: string, role: Role): Pro
       }
     };
 
-    // 4. Serialización profunda para transferencia HTTP
-    return JSON.stringify(backupSnapshot, null, 2);
+    // 4. Serialización y Carga a Vercel Blob (Nube)
+    const backupContent = JSON.stringify(backupSnapshot, null, 2);
+    const fileName = `backups/educontrol_full_dump_${Date.now()}.json`;
+
+    console.log(`[Vercel Blob] Iniciando carga de respaldo para: ${userEmail}`);
+
+    const blob = await put(fileName, backupContent, {
+      access: 'public',
+      contentType: 'application/json',
+      token:"vercel_blob_rw_p7Saci39nffKCvfJ_WSTqJ8OsNZg5rd883gK1bqWcsQvMVu",
+      addRandomSuffix: true,
+    });
+
+    console.log(`[Vercel Blob] Respaldo completado exitosamente: ${blob.url}`);
+
+    // 5. Retorno estructurado para el Dashboard
+    return {
+      success: true,
+      url: blob.url
+    };
 
   } catch (error) {
     console.error("[Disaster Recovery Error] Fallo al generar Backup Completo:", error);
