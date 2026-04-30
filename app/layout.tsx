@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
+import EduControlFloatingChat from "@/components/EduControlFloatingChat";
 
 // 1. IMPORTA ESTO
 import { UserProvider } from "@/context/UserContext";
@@ -22,8 +23,14 @@ export default function RootLayout({
       <body className={inter.className}>
         {/* 2. ENVUELVE TODO DENTRO DE ESTO */}
         <UserProvider>
-          {children}
-        </UserProvider>
+            {children}
+
+            <EduControlFloatingChat 
+              userName="Usuario" 
+              userRole="DOCENTE" 
+            />
+          </UserProvider>
+        
       </body>
     </html>
   );

@@ -55,10 +55,13 @@ export async function sendVerificationCode(email: string) {
     const expireMinutes = isAdmin ? 10 : 30;
     const expires = new Date(new Date().getTime() + expireMinutes * 60 * 1000);
 
-    // Guardar en Base de Datos
-    await prisma.verificationToken.deleteMany({ where: { email } });
-    await prisma.verificationToken.create({
-      data: { email, token, expires }
+    // ✅ SOLUCIÓN: Guardar en Base de Datos actualizando el usuario
+    await prisma.user.update({
+      where: { email },
+      data: { 
+        verificationToken: token,
+        tokenExpires: expires
+      }
     });
 
     // Diseño del Correo HTML
@@ -98,13 +101,17 @@ export async function sendVerificationCode(email: string) {
 // 2. VERIFICAR CÓDIGO
 export async function verifyResetCode(email: string, code: string) {
   try {
-    const record = await prisma.verificationToken.findFirst({
-      where: { email, token: code }
+    // ✅ SOLUCIÓN: Buscar directamente en el modelo de usuario
+    const user = await prisma.user.findFirst({
+      where: { 
+        email: email, 
+        verificationToken: code 
+      }
     });
 
-    if (!record) return { success: false, message: 'Código inválido.' };
+    if (!user) return { success: false, message: 'Código inválido.' };
     
-    if (new Date() > record.expires) {
+    if (user.tokenExpires && new Date() > user.tokenExpires) {
       return { success: false, message: 'El código ha expirado.' };
     }
 
@@ -120,14 +127,15 @@ export async function resetPasswordWithCode(email: string, code: string, newPass
     const check = await verifyResetCode(email, code);
     if (!check.success) return check;
 
-    // Actualizar usuario
+    // ✅ SOLUCIÓN: Actualizar contraseña y borrar el token usado de una sola vez
     await prisma.user.update({
       where: { email },
-      data: { password: newPassword }
+      data: { 
+        password: newPassword,
+        verificationToken: null, // Borramos el token para que no se re-utilice
+        tokenExpires: null
+      }
     });
-
-    // Borrar código usado
-    await prisma.verificationToken.deleteMany({ where: { email } });
 
     return { success: true };
   } catch (error) {

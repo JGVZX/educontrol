@@ -2,18 +2,13 @@
 
 /**
  * @file actions.ts
- * @description Capa de Servicios Backend (Server Actions) para el Módulo de Asistencia.
- * Implementa validaciones de reglas de negocio, transacciones atómicas y manejo de concurrencia.
+ * @description Capa de Servicios Backend para el Módulo de Asistencia Pro.
  * @context Proyecto de Tesis - Ingeniería en Sistemas
  */
 
 import { prisma } from '@/lib/prisma';
 import { revalidatePath } from 'next/cache';
 import { AttendanceStatus } from '@prisma/client';
-
-// ============================================================================
-// INTERFACES Y DTOs (Data Transfer Objects)
-// ============================================================================
 
 export interface AttendanceRecordDTO {
   id: string;
@@ -22,64 +17,73 @@ export interface AttendanceRecordDTO {
 }
 
 // ============================================================================
-// 1. OBTENCIÓN DE CATÁLOGO DE CURSOS
+// 1. OBTENER CURSOS Y ASIGNATURAS (FILTRADO POR ROL DOCENTE)
 // ============================================================================
-
-/**
- * Retorna los cursos disponibles según el vector de autorización del usuario.
- * @param {string} userEmail - Correo del usuario autenticado.
- * @param {string} role - Rol institucional del usuario.
- * @returns {Promise<Array>} Colección de cursos autorizados.
- */
 export async function getMyCourses(userEmail: string, role: string) {
   try {
-    if (role === 'DIRECTOR' || role === 'SECRETARIA') {
+    // Si es directivo o admin, ve TODO el colegio
+    if (role === 'DIRECTOR' || role === 'SECRETARIA' || role === 'ADMIN_SISTEMA') {
       return await prisma.course.findMany({ 
-        orderBy: { name: 'asc' } 
+        orderBy: { name: 'asc' },
+        include: { subjects: { orderBy: { name: 'asc' } } }
       });
-    } else {
+    } 
+    
+    // Si es DOCENTE, filtramos estrictamente SUS asignaturas y SUS cursos
+    if (role === 'DOCENTE') {
       const teacher = await prisma.user.findUnique({
         where: { email: userEmail },
-        include: { subjects: { include: { course: true } } }
+        include: { 
+          subjects: { 
+            include: { course: true } 
+          } 
+        }
       });
       
-      if (!teacher) return [];
+      if (!teacher || !teacher.subjects) return [];
 
-      // Filtro algorítmico para extraer cursos únicos a partir de las asignaturas
-      const uniqueCourses = new Map();
-      teacher.subjects.forEach(sub => {
-         if (sub.course && !uniqueCourses.has(sub.course.id)) {
-             uniqueCourses.set(sub.course.id, sub.course);
+      // Mapeo Inteligente: Agrupamos las asignaturas del docente dentro de sus respectivos cursos
+      const courseMap = new Map();
+      
+      teacher.subjects.forEach(subject => {
+         if (subject.course) {
+             const courseId = subject.course.id;
+             // Si el curso aún no está en el mapa, lo agregamos vacío
+             if (!courseMap.has(courseId)) {
+                 courseMap.set(courseId, { 
+                    id: subject.course.id, 
+                    name: subject.course.name, 
+                    subjects: [] // Aquí guardaremos SOLO las asignaturas de este profesor
+                 });
+             }
+             // Insertamos la asignatura que el profesor imparte en este curso
+             courseMap.get(courseId).subjects.push({
+                 id: subject.id,
+                 name: subject.name
+             });
          }
       });
       
-      return Array.from(uniqueCourses.values());
+      // Retornamos el array de cursos ordenado alfabéticamente
+      return Array.from(courseMap.values()).sort((a, b) => a.name.localeCompare(b.name));
     }
+
+    return [];
+
   } catch (error) {
-    console.error("[Capa de Datos] Excepción en getMyCourses:", error);
+    console.error("[Backend] Error en getMyCourses:", error);
     return [];
   }
 }
 
 // ============================================================================
-// 2. RECUPERACIÓN DE EXPEDIENTES Y ESTADO DIARIO
+// 2. RECUPERAR ESTUDIANTES Y ASISTENCIA POR ASIGNATURA
 // ============================================================================
-
-/**
- * Obtiene la matrícula de un curso específico y mapea su estado de asistencia para una fecha dada.
- * @param {string} courseId - Identificador único del curso.
- * @param {string} dateStr - Fecha de consulta en formato ISO (YYYY-MM-DD).
- * @returns {Promise<Array>} Lista de estudiantes con su estado actual.
- */
-export async function getCourseStudents(courseId: string, dateStr: string) {
+export async function getCourseStudents(courseId: string, subjectId: string, dateStr: string) {
   try {
-    // Normalización de la franja horaria para evitar colisiones UTC
     const targetDate = new Date(`${dateStr}T12:00:00.000Z`);
-    const startOfDay = new Date(targetDate); 
-    startOfDay.setUTCHours(0, 0, 0, 0);
-    
-    const endOfDay = new Date(targetDate); 
-    endOfDay.setUTCHours(23, 59, 59, 999);
+    const startOfDay = new Date(targetDate); startOfDay.setUTCHours(0, 0, 0, 0);
+    const endOfDay = new Date(targetDate); endOfDay.setUTCHours(23, 59, 59, 999);
 
     const students = await prisma.student.findMany({
       where: { 
@@ -87,11 +91,16 @@ export async function getCourseStudents(courseId: string, dateStr: string) {
         estatus: 'ACTIVO',
         isDeleted: false
       },
-      orderBy: { apellido: 'asc' },
+      orderBy: [
+        { apellido: 'asc' },
+        { nombre: 'asc' }
+      ],
       include: {
+        // Buscamos si ya pasaron lista PARA ESTA ASIGNATURA en este día
         attendance: {
           where: { 
-            date: { gte: startOfDay, lte: endOfDay } 
+            date: { gte: startOfDay, lte: endOfDay },
+            subjectId: subjectId // IMPORTANTE: Filtro por Asignatura
           }
         }
       }
@@ -101,82 +110,66 @@ export async function getCourseStudents(courseId: string, dateStr: string) {
       const record = s.attendance[0]; 
       return {
         id: s.id,
-        nombre: `${s.nombre} ${s.apellido}`.trim(),
-        matricula: s.matricula,
-        foto: `${s.nombre.charAt(0)}${s.apellido ? s.apellido.charAt(0) : ''}`.toUpperCase(),
+        nombre: s.nombre,
+        apellido: s.apellido,
+        rne: s.rne,
+        folio: s.folio,
+        fotoUrl: s.fotoUrl,
         estado: record ? record.status : null, 
         nota: record ? record.note : ''
       };
     });
 
   } catch (error) {
-    console.error("[Capa de Datos] Excepción en getCourseStudents:", error);
+    console.error("[Backend] Error en getCourseStudents:", error);
     return [];
   }
 }
 
 // ============================================================================
-// 3. PROCESAMIENTO Y PERSISTENCIA DE ASISTENCIA (TRANSACCIÓN ACID)
+// 3. GUARDAR ASISTENCIA ENLAZADA A LA ASIGNATURA
 // ============================================================================
-
-/**
- * Registra o actualiza la asistencia de un bloque de estudiantes de manera atómica.
- * Implementa validación de reglas de negocio para días no laborables.
- * * @param {string} courseId - Identificador del curso.
- * @param {string} dateStr - Fecha del registro (YYYY-MM-DD).
- * @param {AttendanceRecordDTO[]} attendanceData - Arreglo con los estados a persistir.
- * @param {string} userRole - Rol de quien ejecuta la acción (Opcional, para validación estricta).
- */
 export async function saveAttendance(
     courseId: string, 
+    subjectId: string,
     dateStr: string, 
     attendanceData: AttendanceRecordDTO[],
-    userRole: string = 'DOCENTE' // Default estricto por seguridad
+    userRole: string
 ) {
   try {
-    // 1. Validación de Regla de Negocio (Defensa en Profundidad)
     const [year, month, day] = dateStr.split('-');
     const localDate = new Date(Number(year), Number(month) - 1, Number(day));
     const dayOfWeek = localDate.getDay();
     
     if (userRole === 'DOCENTE' && (dayOfWeek === 0 || dayOfWeek === 6)) {
-      return { 
-        success: false, 
-        message: 'Violación de regla de negocio: Los docentes no están autorizados a registrar asistencia en fines de semana.' 
-      };
+      return { success: false, message: 'Los docentes no pueden registrar asistencia fines de semana.' };
     }
 
-    // 2. Configuración de límites de tiempo
     const targetDate = new Date(`${dateStr}T12:00:00.000Z`);
-    const startOfDay = new Date(targetDate); 
-    startOfDay.setUTCHours(0, 0, 0, 0);
-    
-    const endOfDay = new Date(targetDate); 
-    endOfDay.setUTCHours(23, 59, 59, 999);
+    const startOfDay = new Date(targetDate); startOfDay.setUTCHours(0, 0, 0, 0);
+    const endOfDay = new Date(targetDate); endOfDay.setUTCHours(23, 59, 59, 999);
 
     const studentIds = attendanceData.map(s => s.id);
 
-    // 3. Bloque Transaccional (Todo o Nada)
     await prisma.$transaction(async (tx) => {
-        
-        // Limpieza del bloque anterior para evitar duplicidad de registros (Idempotencia)
+        // Borramos los registros anteriores DE ESA ASIGNATURA en esa fecha
         await tx.attendance.deleteMany({
             where: {
                 studentId: { in: studentIds },
+                subjectId: subjectId,
                 date: { gte: startOfDay, lte: endOfDay }
             }
         });
 
-        // Mapeo estructural de la nueva data. 
-        // Si el estado es null desde el cliente, se asume PRESENTE por defecto funcional.
+        // Preparamos los nuevos registros inyectando el subjectId
         const dataToInsert = attendanceData.map(record => ({
             studentId: record.id,
+            subjectId: subjectId, // Enlace directo a la materia (Ej: Ciencias Sociales)
             date: targetDate,
             status: record.estado || AttendanceStatus.PRESENTE,
             note: record.nota || ''
         }));
 
-        // Inserción masiva optimizada
         await tx.attendance.createMany({
             data: dataToInsert
         });
@@ -186,10 +179,7 @@ export async function saveAttendance(
     return { success: true };
     
   } catch (error) {
-    console.error("[Arquitectura] Fallo crítico en transacción saveAttendance:", error);
-    return { 
-      success: false, 
-      message: 'Excepción interna al intentar persistir los registros de asistencia en la base de datos.' 
-    };
+    console.error("[Backend] Fallo en saveAttendance:", error);
+    return { success: false, message: 'Error interno de base de datos.' };
   }
 }

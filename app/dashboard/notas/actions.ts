@@ -2,8 +2,9 @@
 
 /**
  * @file actions.ts
- * @description Capa de Servicios Backend (Server Actions) para el Cuaderno de Calificaciones.
- * Soporta Historial Acumulativo (Boletín Anual) y Promedios en Tiempo Real.
+ * @description Capa de Servicios Backend (Server Actions) para el Cuaderno de Calificaciones Elite.
+ * Soporta Historial MINERD, Promedios en Tiempo Real y Auditoría de Calificaciones.
+ * @author Jose Junior Guzmán Veloz
  * @context Proyecto de Tesis - Ingeniería en Sistemas
  */
 
@@ -63,7 +64,6 @@ export async function getSubjects(userEmail: string, role: string) {
 // 2. RECUPERACIÓN DEL HISTORIAL COMPLETO (RÉCORD ACUMULATIVO)
 // ============================================================================
 
-// IMPORTANTE: Ya no filtramos por "mes". Traemos todo el año para armar el boletín.
 export async function getStudentGrades(subjectId: string) {
   try {
     const subject = await prisma.subject.findUnique({ where: { id: subjectId } });
@@ -75,21 +75,27 @@ export async function getStudentGrades(subjectId: string) {
         estatus: 'ACTIVO',
         isDeleted: false 
       },
-      orderBy: { apellido: 'asc' },
+      orderBy: [
+        { apellido: 'asc' },
+        { nombre: 'asc' }
+      ],
       include: {
         grades: { 
-          // Extraemos TODAS las calificaciones de ese año
+          // Extraemos TODAS las calificaciones de ese año para el Récord Anual
           where: { subjectId, year: CURRENT_SCHOOL_YEAR } 
         }
       }
     });
 
+    // Mapeo Estricto al DTO del Frontend Elite
     return students.map(s => ({
         id: s.id,
-        nombre: `${s.nombre} ${s.apellido}`.trim(),
-        matricula: s.matricula,
-        foto: `${s.nombre.charAt(0)}${s.apellido ? s.apellido.charAt(0) : ''}`.toUpperCase(),
-        grades: s.grades || [] // Retornamos el array completo de meses evaluados
+        nombre: s.nombre,
+        apellido: s.apellido,
+        rne: s.rne,
+        folio: s.folio,
+        fotoUrl: s.fotoUrl,
+        grades: s.grades || [] 
     }));
 
   } catch (error) {
@@ -99,31 +105,34 @@ export async function getStudentGrades(subjectId: string) {
 }
 
 // ============================================================================
-// 3. PROCESAMIENTO, AUDITORÍA Y PERSISTENCIA MENSUAL
+// 3. PROCESAMIENTO Y PERSISTENCIA MENSUAL (CON DEFENSA DE AUDITORÍA)
 // ============================================================================
 
 export async function saveStudentGrade(
     studentId: string, 
     subjectId: string, 
     data: GradePayloadDTO, 
-    mes: string, // El guardado sí requiere el mes específico
+    mes: string, 
     userRole: string = 'DOCENTE'
 ) {
   try {
+    // Permisos Directivos
+    const isDirectivo = ['DIRECTOR', 'SECRETARIA', 'ADMIN_SISTEMA'].includes(userRole);
+
     // 1. Defensa en Servidor (Auditoría específica del mes)
     const existingGrade = await prisma.grade.findUnique({
         where: { studentId_subjectId_year_mes: { studentId, subjectId, year: CURRENT_SCHOOL_YEAR, mes } }
     });
 
-    if (existingGrade?.isLocked && userRole !== 'DIRECTOR') {
-        return { success: false, message: `El registro de ${mes} está cerrado por auditoría.` };
+    if (existingGrade?.isLocked && !isDirectivo) {
+        return { success: false, message: `Auditoría Cerrada: El registro de ${mes} no admite modificaciones.` };
     }
 
-    const targetLockState = userRole === 'DIRECTOR' && data.isLocked !== undefined 
+    const targetLockState = isDirectivo && data.isLocked !== undefined 
         ? data.isLocked 
         : (existingGrade?.isLocked || false);
 
-    // 2. Procesamiento Unificado de la Rúbrica
+    // 2. Procesamiento Unificado de la Rúbrica (Escala MINERD 100pts)
     const fields = ['disciplina', 'tarea', 'practica', 'teoria', 'examenFinal'] as const;
     const isUnscored = fields.every(f => data[f] === null || data[f] === undefined);
 
@@ -146,7 +155,7 @@ export async function saveStudentGrade(
         isLocked: targetLockState
     };
 
-    // 3. Upsert utilizando la clave única compuesta (student + subject + year + mes)
+    // 3. Upsert utilizando la clave única compuesta
     await prisma.grade.upsert({
         where: {
             studentId_subjectId_year_mes: { studentId, subjectId, year: CURRENT_SCHOOL_YEAR, mes } 
@@ -168,6 +177,39 @@ export async function saveStudentGrade(
     return { success: false, message: 'Excepción al intentar consolidar la evaluación en la base de datos.' };
   }
 }
+
+// ============================================================================
+// 4. CONTROL DE AUDITORÍA DIRECTIVA (BLOQUEO / DESBLOQUEO)
+// ============================================================================
+
+export async function toggleGradeLock(studentId: string, subjectId: string, mes: string, isLocked: boolean) {
+    try {
+        // Upsert permite bloquear un mes incluso si el docente aún no ha puesto notas
+        await prisma.grade.upsert({
+            where: {
+                studentId_subjectId_year_mes: { studentId, subjectId, year: CURRENT_SCHOOL_YEAR, mes }
+            },
+            create: {
+                studentId, subjectId, year: CURRENT_SCHOOL_YEAR, mes,
+                isLocked,
+                status: GradeStatus.EN_CURSO
+            },
+            update: {
+                isLocked
+            }
+        });
+
+        revalidatePath('/dashboard/calificaciones');
+        return { success: true };
+    } catch (error: any) {
+        console.error("[Seguridad] Fallo al alternar estado de auditoría:", error.message);
+        return { success: false, message: 'No se pudo actualizar el estado de la auditoría en la base de datos.' };
+    }
+}
+
+// ============================================================================
+// 5. MOTOR DE RECALCULO DE ÍNDICE ACUMULADO
+// ============================================================================
 
 /**
  * @description Mantiene actualizado el índice de rendimiento acumulado.

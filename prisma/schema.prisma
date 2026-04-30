@@ -69,7 +69,6 @@ enum ObservationType {
   GENERAL
 }
 
-// Nuevos Enums para el Módulo NOC (Tickets)
 enum TicketStatus {
   PENDIENTE
   REVISION
@@ -114,7 +113,7 @@ model User {
   subjects          Subject[]
   observaciones     Observation[]
   schedules         Schedule[]
-  tickets           Ticket[]       // NUEVO: Relación de tickets creados por este usuario
+  tickets           Ticket[]       // Tickets creados por este usuario
 }
 
 // ==========================================
@@ -169,52 +168,61 @@ model RA {
 }
 
 // ==========================================
-// 4. ESTUDIANTES (EXPEDIENTE COMPLETO)
+// 4. ESTUDIANTES (EXPEDIENTE ESTÁNDAR MINERD)
 // ==========================================
 
 model Student {
-  id              String        @id @default(uuid())
-  matricula       String        @unique
-  estatus         StudentStatus @default(ACTIVO)
-  isDeleted       Boolean       @default(false)
-  deletedAt       DateTime?
+  id                   String        @id @default(uuid())
+  
+  // IDENTIFICADORES OFICIALES (Sustituyen a la matrícula)
+  rne                  String        @unique // Registro Nacional de Estudiante
+  folio                String        // Número de Folio / Libro de inscripción
+  
+  estatus              StudentStatus @default(ACTIVO)
+  isDeleted            Boolean       @default(false)
+  deletedAt            DateTime?
 
-  promedio        Float         @default(0.0)
+  promedio             Float         @default(0.0)
 
   // Datos Personales
-  nombre          String
-  apellido        String
-  fechaNacimiento String?
-  genero          String?
-  nacionalidad    String?       @default("Dominicana")
-  direccion       String?
-  fotoUrl         String?
+  nombre               String
+  apellido             String
+  fechaNacimiento      String?
+  genero               String?
+  nacionalidad         String?       @default("Dominicana")
+  direccion            String?
+  
+  // Documentos Oficiales MINERD
+  fotoUrl              String?       // Foto 2x2 del estudiante
+  actaNacimientoUrl    String?       // Archivo adjunto del acta de nacimiento
+  certificadoMedicoUrl String?       // Archivo adjunto del certificado médico
 
   // Datos Medicos
-  alergias        String?
-  condiciones     String?
-  tipoSangre      String?
-  seguroMedico    String?
+  alergias             String?
+  condiciones          String?
+  tipoSangre           String?
+  seguroMedico         String?
 
-  // Datos del Tutor MINERD
-  tutorNombre     String?
-  tutorParentesco String?
-  tutorTelefono   String?
-  tutorCorreo     String?
-  tutorOcupacion  String?
+  // Datos del Tutor
+  tutorNombre          String?
+  tutorParentesco      String?
+  tutorTelefono        String?
+  tutorCorreo          String?
+  tutorOcupacion       String?
 
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
 
   // Relaciones
-  courseId        String?
-  course          Course?       @relation(fields: [courseId], references: [id])
-  grades          Grade[]
-  raScores        RAScore[]
-  attendance      Attendance[]
-  observaciones   Observation[] 
+  courseId             String?
+  course               Course?       @relation(fields: [courseId], references: [id])
+  grades               Grade[]
+  raScores             RAScore[]
+  attendance           Attendance[]
+  observaciones        Observation[] 
 
   @@index([nombre, apellido])
+  @@index([rne])
   @@index([isDeleted, estatus])
 }
 
@@ -242,7 +250,7 @@ model Grade {
   year           String      @default("2025-2026") 
   mes            String      @default("SEPTIEMBRE") 
   
-  // Esquema de Evaluacion Universitaria (Unificado para todas las materias)
+  // Esquema de Evaluacion
   disciplina     Int?        
   tarea          Int?        
   practica       Int?        
@@ -321,15 +329,14 @@ model Schedule {
 
 model Ticket {
   id          String         @id @default(uuid())
-  issue       String         // Asunto del reporte
-  description String         @db.Text // Descripción detallada (Text para no limitar caracteres)
+  issue       String         
+  description String         @db.Text 
   status      TicketStatus   @default(PENDIENTE)
   priority    TicketPriority @default(BAJA)
   
   createdAt   DateTime       @default(now())
   updatedAt   DateTime       @updatedAt
 
-  // Relación: Usuario que reporta la incidencia
   docenteId   String
   docente     User           @relation(fields: [docenteId], references: [id], onDelete: Cascade)
 }

@@ -53,6 +53,8 @@ export interface StudentActivity {
   nombre: string;
   apellido: string;
   matricula: string;
+  rne?: string | null;      // <-- Agregado RNE para el Dashboard
+  folio?: string | null;    // <-- Agregado Folio para el Dashboard
   createdAt: string;
   status: 'NUEVO' | 'REGULAR' | 'PENDIENTE';
 }
@@ -472,10 +474,13 @@ function SecretariaView({ data }: { data: DashboardData }) {
     if (!searchTerm.trim()) return dataSource.slice(0, 20);
     
     const term = searchTerm.toLowerCase();
+    // Búsqueda robusta: Nombre, Apellido, Matrícula, RNE o Folio
     const filtrados = dataSource.filter(student => 
       student.nombre.toLowerCase().includes(term) ||
       student.apellido.toLowerCase().includes(term) ||
-      student.matricula.toLowerCase().includes(term)
+      student.matricula.toLowerCase().includes(term) ||
+      (student.rne && student.rne.toLowerCase().includes(term)) ||
+      (student.folio && student.folio.toLowerCase().includes(term))
     );
     return filtrados.slice(0, 20);
   }, [searchTerm, data.recentActivity]);
@@ -492,7 +497,7 @@ function SecretariaView({ data }: { data: DashboardData }) {
           type="text" 
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          placeholder="Escriba la matrícula o nombre del alumno para buscar en el padrón..." 
+          placeholder="Escriba el nombre, RNE o Folio del alumno..." 
           className="w-full bg-transparent border-none outline-none text-slate-800 dark:text-slate-100 py-3 px-4 text-sm font-bold placeholder:text-slate-400 placeholder:font-medium"
         />
         {searchTerm && (
@@ -523,7 +528,7 @@ function SecretariaView({ data }: { data: DashboardData }) {
                <Settings size={16}/> Acciones de Operación
             </h3>
             <div className="grid grid-cols-2 gap-4">
-              <ShortcutBtn href="/dashboard/estudiantes/nuevo" icon={UserPlus} label="Matricular" />
+              <ShortcutBtn href="/dashboard/estudiantes/nuevo" icon={UserPlus} label="Gestion" />
               <ShortcutBtn href="/dashboard/asistencia" icon={CheckSquare} label="Asistencia" />
               <ShortcutBtn href="/dashboard/reportes" icon={FileText} label="Constancias" />
               <ShortcutBtn href="/dashboard/horario" icon={Calendar} label="Horarios" />
@@ -559,7 +564,7 @@ function DirectorView({ data }: { data: DashboardData }) {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <RecentActivityTable activities={(data.recentActivity || []).slice(0, 8)} title="Bitácora de Matriculación" />
+        <RecentActivityTable activities={(data.recentActivity || []).slice(0, 8)} title="Bitácora de registro" />
         
         <div className="bg-white dark:bg-slate-900 rounded-[3rem] p-8 border border-slate-200 dark:border-slate-800 shadow-sm">
           <h3 className="text-[11px] font-black text-slate-400 uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
@@ -648,6 +653,7 @@ function RecentActivityTable({ activities, title }: { activities: StudentActivit
             <tr className="bg-white dark:bg-slate-900 text-[10px] uppercase text-slate-400 font-black tracking-[0.2em]">
               <th className="py-5 pl-8">Identidad Estudiantil</th>
               <th className="py-5">Matrícula</th>
+              <th className="py-5">Datos MINERD</th>
               <th className="py-5">Estado</th>
               <th className="py-5 text-right pr-8">Expediente</th>
             </tr>
@@ -663,6 +669,16 @@ function RecentActivityTable({ activities, title }: { activities: StudentActivit
                 </td>
                 <td className="py-4 text-slate-500 font-mono text-xs font-bold">{student.matricula}</td>
                 <td className="py-4">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">
+                      RNE: <span className="text-slate-800 dark:text-slate-200">{student.rne || 'N/A'}</span>
+                    </span>
+                    <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest">
+                      Folio: <span className="text-slate-800 dark:text-slate-200 truncate max-w-[120px] inline-block align-bottom">{student.folio || 'N/A'}</span>
+                    </span>
+                  </div>
+                </td>
+                <td className="py-4">
                   <span className={`text-[9px] font-black px-3 py-1.5 rounded-lg uppercase tracking-widest border ${
                     student.status === 'NUEVO' ? 'bg-emerald-50 text-emerald-600 border-emerald-100 dark:bg-emerald-500/10 dark:border-emerald-900/30' : 'bg-slate-50 text-slate-500 border-slate-200 dark:bg-slate-800 dark:border-slate-700'
                   }`}>
@@ -677,7 +693,7 @@ function RecentActivityTable({ activities, title }: { activities: StudentActivit
               </tr>
             )) : (
                 <tr>
-                    <td colSpan={4} className="py-16 text-center text-slate-400 font-bold text-sm">No se localizaron registros para los parámetros indicados.</td>
+                    <td colSpan={5} className="py-16 text-center text-slate-400 font-bold text-sm">No se localizaron registros para los parámetros indicados.</td>
                 </tr>
             )}
           </tbody>
@@ -796,6 +812,6 @@ const DashboardSkeleton = () => (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
       {[1,2,3,4].map(i => <div key={i} className="h-40 bg-slate-200 dark:bg-slate-800 rounded-[2.5rem]"></div>)}
     </div>
-    <div className="h-96 w-full bg-slate-200 dark:bg-slate-800 rounded-[3rem]"></div>
+    <div className="h-96 w-full bg-slate-200 ``````````````````````````````````````````````````````````````````````````````````````````````````````````2dark:bg-slate-800 rounded-[3rem]"></div>
   </div>
 );

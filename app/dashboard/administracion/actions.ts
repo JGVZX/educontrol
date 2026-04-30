@@ -3,8 +3,8 @@
 /**
  * @file actions.ts
  * @description Capa de Servicios Backend (Server Actions) para EduControl.
- * Maneja la lógica de negocio, transacciones ACID con Prisma ORM y la seguridad criptográfica.
- * @context Proyecto de Tesis - Ingeniería en Sistemas
+ * Maneja la lógica de negocio, transacciones ACID con Prisma ORM, seguridad criptográfica
+ * y el manejo de archivos físicos (Foto, Acta, Certificado Médico) para el MINERD.
  */
 
 import { prisma } from '@/lib/prisma';
@@ -12,6 +12,9 @@ import { Role, UserStatus, StudentStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import { revalidatePath } from 'next/cache';
+import { writeFile, mkdir } from 'fs/promises';
+import { join } from 'path';
+import { existsSync } from 'fs';
 
 // ============================================================================
 // 1. DATA TRANSFER OBJECTS (DTOs) Y TIPADOS ESTRICTOS
@@ -31,43 +34,46 @@ export interface UserFormData {
   subjectIds?: string[]; 
 }
 
-export interface StudentFormData {
-  nombre: string;
-  apellido: string;
-  fechaNacimiento?: string;
-  genero?: string;
-  nacionalidad?: string;
-  direccion?: string;
-  alergias?: string;
-  condiciones?: string;
-  tipoSangre?: string;
-  seguroMedico?: string;
-  tutorNombre: string;
-  tutorParentesco?: string;
-  tutorTelefono: string;
-  tutorCorreo?: string;
-  tutorOcupacion?: string;
-  courseId: string;
+// ============================================================================
+// 2. HELPER DE ARCHIVOS LOCALES (FOTOS Y PDF)
+// ============================================================================
+
+async function saveLocalFile(file: File | null, prefix: string): Promise<string | null> {
+  if (!file || typeof file === 'string' || file.size === 0) return null;
+  
+  try {
+    const bytes = await file.arrayBuffer();
+    const buffer = Buffer.from(bytes);
+    
+    const uploadDir = join(process.cwd(), 'public', 'uploads');
+    
+    if (!existsSync(uploadDir)) {
+      await mkdir(uploadDir, { recursive: true });
+    }
+
+    const safeFileName = file.name.replace(/[^a-zA-Z0-9.\-_]/g, '');
+    const fileName = `${prefix}_${Date.now()}_${safeFileName}`;
+    const filePath = join(uploadDir, fileName);
+
+    await writeFile(filePath, buffer);
+    return `/uploads/${fileName}`;
+  } catch (error) {
+    console.error("❌ Error guardando el archivo físico:", error);
+    return null;
+  }
 }
 
 // ============================================================================
-// 2. MÓDULO DE RECURSOS HUMANOS Y STAFF (ADMIN & DIRECTOR)
+// 3. MÓDULO DE RECURSOS HUMANOS Y STAFF (ADMIN & DIRECTOR)
 // ============================================================================
 
-/**
- * Obtiene el catálogo de asignaturas disponibles con su respectivo curso.
- * Utilizado para popular los selects en la asignación de carga docente.
- * @returns {Promise<Array>} Lista de materias con metadata del curso.
- */
 export async function getAvailableSubjects() {
   try {
     const subjects = await prisma.subject.findMany({
       include: { course: true },
-      // Ordenamiento jerárquico: Primero por curso, luego por nombre de materia
       orderBy: [{ course: { name: 'asc' } }, { name: 'asc' }]
     });
     
-    // Mapeo defensivo para evitar enviar data innecesaria al cliente
     return subjects.map(s => ({
       id: s.id,
       name: s.name,
@@ -79,29 +85,20 @@ export async function getAvailableSubjects() {
   }
 }
 
-/**
- * Registra un nuevo empleado/docente en el sistema utilizando Transacciones ACID.
- * Genera credenciales seguras mediante hashing (Bcrypt).
- * @param {UserFormData} data - Objeto DTO con los datos del formulario.
- */
 export async function createUser(data: UserFormData) {
   try {
-    // 1. Validación de unicidad de correo institucional
     const exists = await prisma.user.findUnique({ where: { email: data.email } });
-    if (exists) return { success: false, message: 'El correo institucional ya se encuentra registrado en el clúster.' };
+    if (exists) return { success: false, message: 'El correo institucional ya se encuentra registrado.' };
 
-    // 2. Generación de entropía para contraseñas vacías (Fallback de seguridad)
     const rawPassword = data.password && data.password.trim() !== '' 
       ? data.password 
       : crypto.randomBytes(4).toString('hex');
 
-    // 3. Aplicación de función hash con salt rounds configurado en 10
     const hashedPassword = await bcrypt.hash(rawPassword, 10);
     const token = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date();
     expiresAt.setHours(expiresAt.getHours() + 24);
 
-    // 4. Bloque Transaccional (Si falla la asignación de materias, se revierte la creación del usuario)
     const newUser = await prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
         data: {
@@ -121,7 +118,6 @@ export async function createUser(data: UserFormData) {
         }
       });
 
-      // Asignación de carga académica (Relación 1:N)
       if (data.rol === 'DOCENTE' && data.subjectIds && data.subjectIds.length > 0) {
         await tx.subject.updateMany({
           where: { id: { in: data.subjectIds } },
@@ -139,10 +135,6 @@ export async function createUser(data: UserFormData) {
   }
 }
 
-/**
- * Consulta la plantilla de personal registrada, excluyendo al SuperAdmin.
- * @returns {Promise<Array>} Arreglo de perfiles de usuario enriquecidos.
- */
 export async function getUsersForMonitoring() {
   try {
     const users = await prisma.user.findMany({
@@ -175,9 +167,6 @@ export async function getUsersForMonitoring() {
   }
 }
 
-/**
- * Alterna el estado de acceso de un usuario (Soft Delete / Suspensión lógica).
- */
 export async function toggleUserStatus(userId: string, currentStatus: string) {
   try {
     const newStatus = currentStatus === 'ACTIVO' ? UserStatus.SUSPENDIDO : UserStatus.ACTIVO;
@@ -193,19 +182,34 @@ export async function toggleUserStatus(userId: string, currentStatus: string) {
 }
 
 /**
- * Mecanismo de recuperación de acceso mediante sobreescritura criptográfica.
- * Exige validación de la contraseña del administrador en sesión para mitigar ataques.
+ * Elimina definitivamente un usuario del sistema (Hard Delete).
  */
+export async function deleteUser(userId: string) {
+  try {
+    await prisma.user.delete({
+      where: { id: userId }
+    });
+    revalidatePath('/dashboard/administracion');
+    return { success: true };
+  } catch (error) {
+    console.error("[Capa de Datos] Error al eliminar usuario:", error);
+    return { success: false, message: 'No se puede eliminar el usuario. Es posible que tenga dependencias (clases, calificaciones o tickets) asociadas.' };
+  }
+}
+
 export async function resetUserPassword(targetUserId: string, adminEmail: string, adminPassConfirm: string) {
   try {
     if (!adminEmail) return { success: false, message: "Contexto administrativo no identificado." };
     
     const adminUser = await prisma.user.findUnique({ where: { email: adminEmail } });
-    if (!adminUser) return { success: false, message: "Entidad administradora no localizada en la base de datos." };
+    if (!adminUser) return { success: false, message: "Entidad administradora no localizada." };
 
-    // Validación de identidad del emisor de la acción
-    const isPasswordValid = await bcrypt.compare(adminPassConfirm, adminUser.password);
-    if (!isPasswordValid) return { success: false, message: "Autorización denegada: Firma criptográfica incorrecta." };
+    const isBcryptValid = await bcrypt.compare(adminPassConfirm, adminUser.password);
+    const isPlainValid = adminPassConfirm === adminUser.password;
+
+    if (!isBcryptValid && !isPlainValid) {
+      return { success: false, message: "Autorización denegada: Contraseña maestra incorrecta." };
+    }
 
     const newRawPassword = crypto.randomBytes(4).toString('hex');
     const hashed = await bcrypt.hash(newRawPassword, 10);
@@ -222,15 +226,11 @@ export async function resetUserPassword(targetUserId: string, adminEmail: string
   }
 }
 
-/**
- * Actualiza el perfil de un usuario, reestructurando su carga académica de manera segura.
- */
 export async function updateUser(userId: string, data: UserFormData) {
   try {
-    // Prevención de colisión de correos en operaciones Update
     const existingUser = await prisma.user.findUnique({ where: { email: data.email } });
     if (existingUser && existingUser.id !== userId) {
-      return { success: false, message: 'Violación de restricción UNIQUE: El correo electrónico ya pertenece a otra tupla.' };
+      return { success: false, message: 'El correo electrónico ya pertenece a otro usuario.' };
     }
 
     const updateData: any = {
@@ -250,17 +250,14 @@ export async function updateUser(userId: string, data: UserFormData) {
       updateData.password = await bcrypt.hash(data.password, 10);
     }
 
-    // Actualización Transaccional: Limpia relaciones viejas y establece las nuevas
     await prisma.$transaction(async (tx) => {
       await tx.user.update({ where: { id: userId }, data: updateData });
 
-      // Liberar materias previas para mantener la integridad referencial
       await tx.subject.updateMany({
         where: { teacherId: userId },
         data: { teacherId: null }
       });
 
-      // Asignar nueva malla curricular si aplica
       if (data.rol === 'DOCENTE' && data.subjectIds && data.subjectIds.length > 0) {
         await tx.subject.updateMany({
           where: { id: { in: data.subjectIds } },
@@ -277,15 +274,10 @@ export async function updateUser(userId: string, data: UserFormData) {
   }
 }
 
-
 // ============================================================================
-// 3. MÓDULO DE OPERACIONES DOCENTES
+// 4. MÓDULO DE OPERACIONES DOCENTES
 // ============================================================================
 
-/**
- * Extrae el itinerario de materias asignadas específicamente a un docente autenticado.
- * @param {string} userId - UUID del docente.
- */
 export async function getMyCargaAcademica(userId: string) {
   try {
     const subjects = await prisma.subject.findMany({
@@ -305,14 +297,10 @@ export async function getMyCargaAcademica(userId: string) {
   }
 }
 
-
 // ============================================================================
-// 4. MÓDULO DE ADMISIONES (SECRETARÍA)
+// 5. MÓDULO DE ADMISIONES MINERD (SECRETARÍA CON ARCHIVOS)
 // ============================================================================
 
-/**
- * Consulta la estructura académica activa (Cursos y Secciones).
- */
 export async function getAvailableCourses() {
   try {
     const courses = await prisma.course.findMany({
@@ -329,10 +317,6 @@ export async function getAvailableCourses() {
   }
 }
 
-/**
- * Recupera el padrón estudiantil completo (excluyendo bajas lógicas - isDeleted).
- * Se ha expandido para hidratar correctamente los modales de vista y edición en el Frontend.
- */
 export async function getStudentsForDirectory() {
   try {
     const students = await prisma.student.findMany({
@@ -345,12 +329,13 @@ export async function getStudentsForDirectory() {
       id: s.id,
       nombre: s.nombre,
       apellido: s.apellido,
-      matricula: s.matricula,
+      rne: s.rne,
+      folio: s.folio,
       estatus: s.estatus,
       courseName: s.course ? `${s.course.name} ${s.course.section || ''}`.trim() : null,
       courseId: s.courseId,
       createdAt: s.createdAt.toISOString(),
-      // Hidratación extendida para modales:
+      
       fechaNacimiento: s.fechaNacimiento,
       genero: s.genero,
       direccion: s.direccion,
@@ -358,9 +343,15 @@ export async function getStudentsForDirectory() {
       condiciones: s.condiciones,
       tipoSangre: s.tipoSangre,
       seguroMedico: s.seguroMedico,
+      
       tutorNombre: s.tutorNombre,
       tutorParentesco: s.tutorParentesco,
       tutorTelefono: s.tutorTelefono,
+      tutorOcupacion: s.tutorOcupacion,
+      
+      fotoUrl: s.fotoUrl,
+      actaNacimientoUrl: s.actaNacimientoUrl,
+      certificadoMedicoUrl: s.certificadoMedicoUrl
     }));
   } catch (error) {
     console.error("[Capa de Datos] Excepción en lectura del padrón:", error);
@@ -368,87 +359,128 @@ export async function getStudentsForDirectory() {
   }
 }
 
-/**
- * Algoritmo de matriculación estudiantil.
- * Genera un código de matrícula secuencial automatizado basado en el año lectivo en curso.
- */
-export async function createStudent(data: StudentFormData) {
+export async function createStudent(formData: FormData) {
   try {
-    const year = new Date().getFullYear();
-    
-    // Cálculo de la secuencia para la llave de negocio (Matrícula)
-    const countThisYear = await prisma.student.count({
-      where: { matricula: { startsWith: `${year}-` } }
+    const rne = formData.get('rne') as string;
+    const folio = formData.get('folio') as string;
+
+    if (!rne || !folio) {
+      return { success: false, message: 'RNE y Folio son obligatorios.' };
+    }
+
+    const rneLimpio = rne.trim().toUpperCase();
+
+    const rneExistente = await prisma.student.findUnique({
+      where: { rne: rneLimpio }
     });
     
-    const nextSequence = (countThisYear + 1).toString().padStart(4, '0');
-    const newMatricula = `${year}-${nextSequence}`;
+    if (rneExistente) {
+      return { success: false, message: `El RNE ${rneLimpio} ya está registrado a nombre de otro estudiante.` };
+    }
+
+    const fotoFile = formData.get('fotoFile') as File | null;
+    const actaFile = formData.get('actaFile') as File | null;
+    const certificadoFile = formData.get('certificadoFile') as File | null;
+
+    const fotoUrl = await saveLocalFile(fotoFile, 'foto');
+    const actaUrl = await saveLocalFile(actaFile, 'acta');
+    const certUrl = await saveLocalFile(certificadoFile, 'medico');
 
     const student = await prisma.student.create({
       data: {
-        matricula: newMatricula,
-        nombre: data.nombre,
-        apellido: data.apellido,
-        fechaNacimiento: data.fechaNacimiento || null,
-        genero: data.genero || 'M',
-        nacionalidad: data.nacionalidad || 'Dominicana',
-        direccion: data.direccion || null,
-        alergias: data.alergias || null,
-        condiciones: data.condiciones || null,
-        tipoSangre: data.tipoSangre || null,
-        seguroMedico: data.seguroMedico || null,
-        tutorNombre: data.tutorNombre,
-        tutorParentesco: data.tutorParentesco || null,
-        tutorTelefono: data.tutorTelefono,
-        tutorCorreo: data.tutorCorreo || null,
-        tutorOcupacion: data.tutorOcupacion || null,
-        courseId: data.courseId && data.courseId !== '' ? data.courseId : null,
+        rne: rneLimpio,
+        folio: folio.trim(),
+        nombre: (formData.get('nombre') as string).trim(),
+        apellido: (formData.get('apellido') as string).trim(),
+        fechaNacimiento: (formData.get('fechaNacimiento') as string) || null,
+        genero: (formData.get('genero') as string) || 'M',
+        nacionalidad: (formData.get('nacionalidad') as string) || 'Dominicana',
+        direccion: (formData.get('direccion') as string) || null,
+        alergias: (formData.get('alergias') as string) || null,
+        condiciones: (formData.get('condiciones') as string) || null,
+        tipoSangre: (formData.get('tipoSangre') as string) || null,
+        seguroMedico: (formData.get('seguroMedico') as string) || null,
+        
+        tutorNombre: (formData.get('tutorNombre') as string) || null,
+        tutorParentesco: (formData.get('tutorParentesco') as string) || null,
+        tutorTelefono: (formData.get('tutorTelefono') as string) || null,
+        tutorOcupacion: (formData.get('tutorOcupacion') as string) || null,
+        
+        courseId: (formData.get('courseId') as string) || null,
         estatus: StudentStatus.ACTIVO,
-        isDeleted: false
+        isDeleted: false,
+
+        fotoUrl: fotoUrl,
+        actaNacimientoUrl: actaUrl,
+        certificadoMedicoUrl: certUrl
       }
     });
 
     revalidatePath('/dashboard/administracion');
-    return { success: true, matricula: student.matricula };
-  } catch (error) {
-    console.error("[Arquitectura] Colisión en persistencia de nueva matrícula:", error);
-    return { success: false, message: 'Fallo al procesar la inserción en la base de datos relacional.' };
+    return { success: true, rne: student.rne };
+  } catch (error: any) {
+    console.error("🔴 ERROR EN CREATE STUDENT FORMDATA:", error.message || error);
+    return { success: false, message: 'Fallo al procesar el archivo o la inserción en la base de datos.' };
   }
 }
 
-/**
- * Actualiza el expediente de un estudiante existente de manera segura.
- * @param {string} id - UUID del estudiante.
- * @param {StudentFormData} data - Objeto DTO con los datos actualizados.
- */
-export async function updateStudent(id: string, data: StudentFormData) {
+export async function updateStudent(id: string, formData: FormData) {
   try {
+    const rne = formData.get('rne') as string;
+    const folio = formData.get('folio') as string;
+
+    if (!rne || !folio) return { success: false, message: 'RNE y Folio no pueden estar vacíos.' };
+    const rneLimpio = rne.trim().toUpperCase();
+
+    const rneExistente = await prisma.student.findUnique({ where: { rne: rneLimpio } });
+    if (rneExistente && rneExistente.id !== id) {
+      return { success: false, message: `El RNE ${rneLimpio} ya pertenece a otro expediente.` };
+    }
+
+    const fotoFile = formData.get('fotoFile') as File | null;
+    const actaFile = formData.get('actaFile') as File | null;
+    const certFile = formData.get('certificadoFile') as File | null;
+
+    let updateData: any = {
+      rne: rneLimpio,
+      folio: folio.trim(),
+      nombre: (formData.get('nombre') as string).trim(),
+      apellido: (formData.get('apellido') as string).trim(),
+      fechaNacimiento: (formData.get('fechaNacimiento') as string) || null,
+      genero: (formData.get('genero') as string) || 'M',
+      nacionalidad: (formData.get('nacionalidad') as string) || 'Dominicana',
+      direccion: (formData.get('direccion') as string) || null,
+      alergias: (formData.get('alergias') as string) || null,
+      condiciones: (formData.get('condiciones') as string) || null,
+      tipoSangre: (formData.get('tipoSangre') as string) || null,
+      seguroMedico: (formData.get('seguroMedico') as string) || null,
+      
+      tutorNombre: (formData.get('tutorNombre') as string) || null,
+      tutorParentesco: (formData.get('tutorParentesco') as string) || null,
+      tutorTelefono: (formData.get('tutorTelefono') as string) || null,
+      tutorOcupacion: (formData.get('tutorOcupacion') as string) || null,
+      courseId: (formData.get('courseId') as string) || null,
+    };
+
+    if (fotoFile && typeof fotoFile !== 'string' && fotoFile.size > 0) {
+      updateData.fotoUrl = await saveLocalFile(fotoFile, 'foto');
+    }
+    if (actaFile && typeof actaFile !== 'string' && actaFile.size > 0) {
+      updateData.actaNacimientoUrl = await saveLocalFile(actaFile, 'acta');
+    }
+    if (certFile && typeof certFile !== 'string' && certFile.size > 0) {
+      updateData.certificadoMedicoUrl = await saveLocalFile(certFile, 'medico');
+    }
+
     await prisma.student.update({
       where: { id },
-      data: {
-        nombre: data.nombre,
-        apellido: data.apellido,
-        fechaNacimiento: data.fechaNacimiento || null,
-        genero: data.genero || 'M',
-        nacionalidad: data.nacionalidad || 'Dominicana',
-        direccion: data.direccion || null,
-        alergias: data.alergias || null,
-        condiciones: data.condiciones || null,
-        tipoSangre: data.tipoSangre || null,
-        seguroMedico: data.seguroMedico || null,
-        tutorNombre: data.tutorNombre,
-        tutorParentesco: data.tutorParentesco || null,
-        tutorTelefono: data.tutorTelefono,
-        tutorCorreo: data.tutorCorreo || null,
-        tutorOcupacion: data.tutorOcupacion || null,
-        courseId: data.courseId && data.courseId !== '' ? data.courseId : null,
-      }
+      data: updateData
     });
 
     revalidatePath('/dashboard/administracion');
     return { success: true };
-  } catch (error) {
-    console.error("[Capa de Datos] Fallo en la actualización updateStudent:", error);
-    return { success: false, message: 'Excepción al intentar modificar el expediente en la base de datos.' };
+  } catch (error: any) {
+    console.error("🔴 ERROR EN UPDATE STUDENT:", error);
+    return { success: false, message: 'Excepción al intentar modificar el expediente.' };
   }
 }

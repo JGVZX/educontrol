@@ -3,22 +3,24 @@
 import { useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { Lock, User, ArrowRight, Loader2, ShieldCheck, GraduationCap, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Lock, User, ArrowRight, Loader2, ShieldCheck, GraduationCap, CheckCircle2, AlertCircle, AlertTriangle } from 'lucide-react';
 
 // IMPORTACIONES REALES
 import { useUser } from '@/context/UserContext';
-import { authenticateUser } from '@/app/actions/auth'; // Server Action que conecta con PostgreSQL
+import { authenticateUser } from '@/app/actions/auth'; 
 
 function LoginForm() {
-  const { login } = useUser(); // Usamos el contexto para guardar la sesión
+  const { login } = useUser(); 
   const searchParams = useSearchParams();
   
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(''); // Estado para errores reales
+  const [error, setError] = useState(''); 
+  const [roleError, setRoleError] = useState(false); // Nuevo estado visual para el error de rol
 
-  // 1. DETECCIÓN VISUAL (y de seguridad)
+  // 1. DETECCIÓN VISUAL 
   const roleParam = searchParams.get('role');
   const isAdminTheme = roleParam === 'admin'; 
+  const currentPortalType = isAdminTheme ? 'admin' : 'docente';
 
   // 2. CONFIGURACIÓN VISUAL DINÁMICA
   const config = isAdminTheme ? {
@@ -33,7 +35,7 @@ function LoginForm() {
     visualGradient: "from-slate-800 to-slate-950",
     visualIcon: ShieldCheck,
     visualTitle: "Gestión Institucional",
-    visualText: "Supervise el rendimiento académico, gestione la nómina docente y mantenga el control total con seguridad de nivel empresarial.",
+    visualText: "Supervise el rendimiento académico, gestione la nómina docente y mantenga el control total con seguridad empresarial.",
     features: ["Auditoría de Notas", "Gestión de Personal", "Reportes Oficiales"]
   } : {
     theme: 'docente',
@@ -51,22 +53,45 @@ function LoginForm() {
     features: ["Cálculo Automático", "Historial de Asistencia", "Expedientes"]
   };
 
-  // 3. LÓGICA DE LOGIN REAL CON BASE DE DATOS
+  // 3. LÓGICA DE LOGIN CON VERIFICACIÓN DE ROL
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setIsLoading(true);
     setError('');
+    setRoleError(false);
 
     const formData = new FormData(e.currentTarget);
     
-    // Llamada al Server Action (PostgreSQL)
+    // Llamada al Server Action
     const result = await authenticateUser(formData);
 
     if (result.success && result.user) {
-        // ¡ÉXITO! El contexto maneja la redirección al dashboard
+        // VALIDACIÓN DE SEGURIDAD POR ROL
+        const userRole = result.user.role; // Asumiendo que tu usuario tiene esta propiedad de Prisma ('DOCENTE', 'DIRECTOR', etc.)
+        
+        const isDocenteRole = userRole === 'DOCENTE';
+        const isAdministrativeRole = ['DIRECTOR', 'SECRETARIA', 'ADMIN_SISTEMA'].includes(userRole);
+
+        // Si intenta entrar por Docente, pero es administrativo
+        if (currentPortalType === 'docente' && !isDocenteRole) {
+            setError(`Usted es ${userRole}. Por favor, utilice el panel de Acceso Directivo.`);
+            setRoleError(true);
+            setIsLoading(false);
+            return; // Bloqueamos el login
+        }
+
+        // Si intenta entrar por Admin, pero es docente
+        if (currentPortalType === 'admin' && !isAdministrativeRole) {
+            setError(`Usted es ${userRole}. Por favor, utilice el panel de Docentes.`);
+            setRoleError(true);
+            setIsLoading(false);
+            return; // Bloqueamos el login
+        }
+
+        // Si todo coincide, lo dejamos pasar al Dashboard
         login(result.user as any);
     } else {
-        // ERROR
+        // Error de contraseña incorrecta o usuario no encontrado
         setError(result.message || 'Credenciales inválidas');
         setIsLoading(false);
     }
@@ -95,29 +120,25 @@ function LoginForm() {
                 <p className="text-slate-500">{config.subtitle}</p>
             </div>
 
-            {/* Mensaje de Error Real */}
+            {/* Mensaje de Error Dinámico (Normal o de Rol) */}
             {error && (
-                <div className="p-4 bg-red-50 border border-red-100 rounded-xl flex items-center gap-3 text-red-600 animate-in fade-in slide-in-from-top-2">
-                    <AlertCircle size={20} className="shrink-0" />
-                    <span className="text-sm font-bold">{error}</span>
+                <div className={`p-4 border rounded-xl flex items-center gap-3 animate-in fade-in slide-in-from-top-2 ${roleError ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-red-50 border-red-100 text-red-600'}`}>
+                    {roleError ? <AlertTriangle size={24} className="shrink-0" /> : <AlertCircle size={20} className="shrink-0" />}
+                    <span className="text-sm font-bold leading-tight">{error}</span>
                 </div>
             )}
 
             <form onSubmit={handleLogin} className="space-y-5">
                 
-                {/* 🛡️ INPUT OCULTO: Define el portal por el que intentan entrar */}
-                <input 
-                    type="hidden" 
-                    name="portalType" 
-                    value={isAdminTheme ? 'admin' : 'docente'} 
-                />
+                {/* 🛡️ INPUT OCULTO */}
+                <input type="hidden" name="portalType" value={currentPortalType} />
 
                 <div>
                     <label className="block text-sm font-semibold text-slate-700 mb-2">Correo Institucional</label>
                     <div className="relative">
                         <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                         <input 
-                            name="email" // IMPORTANTE PARA EL SERVER ACTION
+                            name="email" 
                             type="email" 
                             required 
                             className={`w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none transition-all font-medium text-slate-900 ${config.borderColor} ${config.ringColor} focus:ring-4`}
@@ -131,7 +152,7 @@ function LoginForm() {
                     <div className="relative">
                         <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
                         <input 
-                            name="password" // IMPORTANTE PARA EL SERVER ACTION
+                            name="password" 
                             type="password" 
                             required 
                             className={`w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl outline-none transition-all font-medium text-slate-900 ${config.borderColor} ${config.ringColor} focus:ring-4`}
@@ -157,9 +178,6 @@ function LoginForm() {
                 </button>
 
             <div className="flex items-center justify-between text-sm">
-    
-    
-    {/* AQUÍ ESTÁ EL NUEVO ENLACE */}
     <Link href="/recuperar" className={`font-semibold hover:underline ${config.accentColor}`}>
         ¿Olvidó su contraseña?
     </Link>
